@@ -1,42 +1,101 @@
-// 1. Recent GitHub Copilot CLI telemetry. The CLI emits most aggregate
-// telemetry as custom metrics under the github-copilot role.
-customMetrics
-| where timestamp > ago(30m)
-| where cloud_RoleName == "github-copilot"
-| project timestamp, name, value, customDimensions
-| order by timestamp desc
+// GitHub Copilot CLI telemetry: Application Insights KQL examples
+//
+// Run each query separately in Logs on the Application Insights resource.
+// These queries use its resource schema: customMetrics, dependencies,
+// timestamp, cloud_RoleName and customDimensions.
+// When querying the backing Log Analytics workspace directly, translate to
+// AppMetrics / AppDependencies and their workspace column names.
+//
+// The CLI examples assume OTEL_SERVICE_NAME=github-copilot. Adjust the role
+// filter if your deployment uses another service name.
+//
+// Query 1 has been confirmed to return github-copilot metrics in this setup.
+// The remaining queries must be validated against the deployed CLI's data.
+// Metrics arriving does not by itself confirm that dependency spans arrive.
+// An empty result can reflect missing spans, attributes, or a different role name.
+//
+// Duration values in the Application Insights dependencies schema are numeric
+// milliseconds. Do not divide duration by the timespan literal 1ms.
 
-// 2. Token usage by model and token type.
+// 1. Confirm metric ingestion by service over the last seven days.
+// Records counts stored metric records, not tokens or requests.
 customMetrics
-| where timestamp > ago(30m)
-| where cloud_RoleName == "github-copilot"
-| where name startswith "gen_ai.client.inference.usage."
-| extend model = tostring(customDimensions["gen_ai.response.model"])
-| summarize Tokens = sum(value) by name, model
-| order by Tokens desc
+| where timestamp > ago(7d)
+| summarize Records = count(), LastSeen = max(timestamp)
+    by cloud_RoleName
+| order by Records desc
 
-// 3. Model and agent latency. Values are seconds for these GenAI metrics.
-customMetrics
-| where timestamp > ago(30m)
+// 2. Model request counts, failures and latency by model.
+// Dependency duration is numeric milliseconds in this Application Insights schema.
+dependencies
+| where timestamp > ago(24h)
 | where cloud_RoleName == "github-copilot"
-| where name in ("gen_ai.client.operation.duration", "gen_ai.invoke_agent.duration")
-| extend model = tostring(customDimensions["gen_ai.response.model"])
-| summarize Calls = count(), P50Seconds = percentile(value, 50), P95Seconds = percentile(value, 95) by name, model
-| order by P95Seconds desc
+| where tostring(customDimensions["gen_ai.operation.name"]) == "chat"
+| extend model = coalesce(
+    tostring(customDimensions["gen_ai.response.model"]),
+    tostring(customDimensions["gen_ai.request.model"]),
+    "unknown")
+| extend durationMs = todouble(duration)
+| summarize
+    Requests = count(),
+    FailedRequests = countif(success == false),
+    AverageDurationMs = avg(durationMs),
+    P95DurationMs = percentile(durationMs, 95)
+    by model
+| order by Requests desc
 
-// 4. Tool activity, including skill invocations. With captureContent=false,
-// the CLI reports tool name "skill" but normally does not expose the invoked
-// skill's own name in customMetrics.
+// 3. Input and output token usage from model-call spans.
+// Only chat spans are included to avoid also summing parent agent usage totals.
+// Totals cover ingested spans with usage attributes; missing or sampled spans affect them.
+// These values are not a billing reconciliation.
+dependencies
+| where timestamp > ago(24h)
+| where cloud_RoleName == "github-copilot"
+| where tostring(customDimensions["gen_ai.operation.name"]) == "chat"
+| extend model = coalesce(
+    tostring(customDimensions["gen_ai.response.model"]),
+    tostring(customDimensions["gen_ai.request.model"]),
+    "unknown")
+| extend
+    inputTokens = tolong(customDimensions["gen_ai.usage.input_tokens"]),
+    outputTokens = tolong(customDimensions["gen_ai.usage.output_tokens"])
+| where isnotnull(inputTokens) or isnotnull(outputTokens)
+| summarize
+    RequestsWithUsage = count(),
+    InputTokens = sum(inputTokens),
+    OutputTokens = sum(outputTokens)
+    by model
+| order by InputTokens desc
+
+// 4. Discover metric names emitted by the deployed CLI version.
+// Inspect the metric aggregation and temporality before summing values.
+// Metric record counts are not token totals.
 customMetrics
 | where timestamp > ago(30m)
 | where cloud_RoleName == "github-copilot"
-| where name == "github.copilot.tool.call.count"
+| summarize Records = count() by name
+| order by Records desc
+
+// 5. Tool execution counts, failures and average duration.
+// Dependency duration is numeric milliseconds. Only explicit success=false records
+// are counted as confirmed failures.
+dependencies
+| where timestamp > ago(24h)
+| where cloud_RoleName == "github-copilot"
+| where tostring(customDimensions["gen_ai.operation.name"]) == "execute_tool"
 | extend tool = tostring(customDimensions["gen_ai.tool.name"])
-| extend succeeded = tostring(customDimensions.success)
-| summarize Calls = sum(value) by tool, succeeded
-| order by Calls desc
+| where isnotempty(tool)
+| extend durationMs = todouble(duration)
+| summarize
+    Executions = count(),
+    FailedExecutions = countif(success == false),
+    AverageDurationMs = avg(durationMs)
+    by tool
+| order by Executions desc
 
-// 5. Copilot CLI dependency spans with skill names.
+// 6. Recent dependency records containing a skill name.
+// The skill-name attribute was observed in the PoC and is version-dependent.
+// A generic tool name of skill does not identify the invoked skill.
 dependencies
 | where timestamp > ago(24h)
 | where cloud_RoleName == "github-copilot"
@@ -44,3 +103,18 @@ dependencies
 | where isnotempty(skill)
 | project timestamp, skill, name, duration, success
 | order by timestamp desc
+
+// 7. Recorded executions by skill over the last seven days.
+// Counts represent ingested dependency records carrying the skill-name attribute.
+// They are not counts of unique users or evidence of productivity.
+dependencies
+| where timestamp > ago(7d)
+| where cloud_RoleName == "github-copilot"
+| extend skill = tostring(customDimensions["gen_ai.skill.name"])
+| where isnotempty(skill)
+| summarize
+    RecordedExecutions = count(),
+    FailedExecutions = countif(success == false),
+    LastSeen = max(timestamp)
+    by skill
+| order by RecordedExecutions desc
