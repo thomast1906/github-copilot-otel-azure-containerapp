@@ -145,44 +145,6 @@ works with a compatible CLI version. Set these variables before launching
 Copilot CLI reports under the `github-copilot` service name, which is already
 included in the provided KQL queries.
 
-## Other coding agents
-
-The collector is vendor-neutral OTLP/HTTP with Bearer authentication, so any
-client that can export OTLP/HTTP protobuf or JSON to `/v1/traces`, `/v1/metrics`,
-or `/v1/logs` with an `Authorization: Bearer` header can use it. The telemetry
-content and KQL shape are determined by the client, not by this collector.
-
-### Codex
-
-Yes—with an important scope difference. Codex supports OTLP **log** export, not
-the Copilot trace/metric set. Put the following in the user-level Codex config
-(not a repository `.codex/config.toml`, because Codex ignores `otel` settings in
-project configuration), replacing the endpoint and token:
-
-```toml
-[otel]
-environment = "poc"
-log_user_prompt = false
-
-[otel.exporter.otlp-http]
-endpoint = "https://<collector-fqdn>/v1/logs"
-protocol = "binary"
-headers = { Authorization = "Bearer <ingest-token>" }
-```
-
-Use [queries/codex.kql](queries/codex.kql) to inspect the resulting records.
-Set `log_user_prompt = true` only if your data policy permits exporting prompts.
-
-### Claude
-
-There are two different cases. A **Claude agent session hosted by VS Code
-Copilot** is covered by the VS Code configuration above: VS Code emits
-extension-level Copilot OpenTelemetry spans for it. Standalone **Claude Code**
-is not automatically covered by these Copilot settings. Connect it only if the
-installed Claude Code version provides a supported OTLP exporter; otherwise this
-Collector cannot invent its telemetry. Do not redirect its model API traffic to
-the collector—an OTLP collector is not an Anthropic API proxy.
-
 ## Security and PoC limits
 
 - External ingress is intentional for desktop clients, and the bearer token is
@@ -197,12 +159,3 @@ the collector—an OTLP collector is not an Anthropic API proxy.
 - One replica and in-memory batching mean a restart can lose queued telemetry.
   Production should use private networking, secret rotation, observability for
   the collector itself, sizing/load tests, and a durable/HA design.
-
-## Sources
-
-- [VS Code: Monitor agent usage with OpenTelemetry](https://code.visualstudio.com/docs/agents/guides/monitoring-agents)
-- [VS Code settings reference](https://code.visualstudio.com/docs/agents/reference/ai-settings)
-- [GitHub Copilot CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
-- [Microsoft: Application Insights through an OpenTelemetry Collector](https://learn.microsoft.com/azure/managed-grafana/grafana-opentelemetry-app-insights)
-- [OpenTelemetry Collector Contrib bearer-token authentication](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/bearertokenauthextension)
-- [OpenAI: Running Codex safely at OpenAI](https://openai.com/index/running-codex-safely/)
