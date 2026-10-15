@@ -1,7 +1,0 @@
-// Codex currently exports OTel log events. The Azure Monitor exporter writes
-// these as Application Insights trace records rather than dependency spans.
-traces
-| where timestamp > ago(30m)
-| where cloud_RoleName == "codex"
-| project timestamp, message, severityLevel, customDimensions
-| order by timestamp desc

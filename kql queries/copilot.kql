@@ -36,34 +36,11 @@ customMetrics
 | summarize Calls = sum(value) by tool, succeeded
 | order by Calls desc
 
-// 5. Individual CLI spans, useful for chat calls, tool spans, and failures.
-// Application Insights stores duration here in milliseconds.
+// 5. Copilot CLI dependency spans with skill names.
 dependencies
-| where timestamp > ago(30m)
-| where cloud_RoleName == "github-copilot"
-| extend operation = tostring(customDimensions["gen_ai.operation.name"])
-| extend tool = tostring(customDimensions["gen_ai.tool.name"])
-| extend model = tostring(customDimensions["gen_ai.response.model"])
-| project timestamp, operation, tool, model, name, duration, success, customDimensions
-| order by timestamp desc
-
-// 6. Skill-tool invocation count. Metric dimensions expose the generic tool
-// name "skill"; use query 7 for identity in individual dependency records.
-customMetrics
-| where timestamp > ago(30m)
-| where cloud_RoleName == "github-copilot"
-| where name == "github.copilot.tool.call.count"
-| where tostring(customDimensions["gen_ai.tool.name"]) == "skill"
-| extend succeeded = tostring(customDimensions.success)
-| summarize SkillToolInvocations = sum(value) by succeeded
-
-// 7. Exact skill names emitted by Copilot CLI.
-dependencies
-| where timestamp > ago(30m)
+| where timestamp > ago(24h)
 | where cloud_RoleName == "github-copilot"
 | extend skill = tostring(customDimensions["gen_ai.skill.name"])
 | where isnotempty(skill)
-| project timestamp, skill,
-    name, duration, success
+| project timestamp, skill, name, duration, success
 | order by timestamp desc
-
