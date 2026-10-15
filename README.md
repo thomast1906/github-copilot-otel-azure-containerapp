@@ -1,0 +1,1 @@
+# github-copilot-otel-azure-containerapp
