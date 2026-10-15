@@ -1,0 +1,69 @@
+// 1. Recent GitHub Copilot CLI telemetry. The CLI emits most aggregate
+// telemetry as custom metrics under the github-copilot role.
+customMetrics
+| where timestamp > ago(30m)
+| where cloud_RoleName == "github-copilot"
+| project timestamp, name, value, customDimensions
+| order by timestamp desc
+
+// 2. Token usage by model and token type.
+customMetrics
+| where timestamp > ago(30m)
+| where cloud_RoleName == "github-copilot"
+| where name startswith "gen_ai.client.inference.usage."
+| extend model = tostring(customDimensions["gen_ai.response.model"])
+| summarize Tokens = sum(value) by name, model
+| order by Tokens desc
+
+// 3. Model and agent latency. Values are seconds for these GenAI metrics.
+customMetrics
+| where timestamp > ago(30m)
+| where cloud_RoleName == "github-copilot"
+| where name in ("gen_ai.client.operation.duration", "gen_ai.invoke_agent.duration")
+| extend model = tostring(customDimensions["gen_ai.response.model"])
+| summarize Calls = count(), P50Seconds = percentile(value, 50), P95Seconds = percentile(value, 95) by name, model
+| order by P95Seconds desc
+
+// 4. Tool activity, including skill invocations. With captureContent=false,
+// the CLI reports tool name "skill" but normally does not expose the invoked
+// skill's own name in customMetrics.
+customMetrics
+| where timestamp > ago(30m)
+| where cloud_RoleName == "github-copilot"
+| where name == "github.copilot.tool.call.count"
+| extend tool = tostring(customDimensions["gen_ai.tool.name"])
+| extend succeeded = tostring(customDimensions.success)
+| summarize Calls = sum(value) by tool, succeeded
+| order by Calls desc
+
+// 5. Individual CLI spans, useful for chat calls, tool spans, and failures.
+// Application Insights stores duration here in milliseconds.
+dependencies
+| where timestamp > ago(30m)
+| where cloud_RoleName == "github-copilot"
+| extend operation = tostring(customDimensions["gen_ai.operation.name"])
+| extend tool = tostring(customDimensions["gen_ai.tool.name"])
+| extend model = tostring(customDimensions["gen_ai.response.model"])
+| project timestamp, operation, tool, model, name, duration, success, customDimensions
+| order by timestamp desc
+
+// 6. Skill-tool invocation count. Metric dimensions expose the generic tool
+// name "skill"; use query 7 for identity in individual dependency records.
+customMetrics
+| where timestamp > ago(30m)
+| where cloud_RoleName == "github-copilot"
+| where name == "github.copilot.tool.call.count"
+| where tostring(customDimensions["gen_ai.tool.name"]) == "skill"
+| extend succeeded = tostring(customDimensions.success)
+| summarize SkillToolInvocations = sum(value) by succeeded
+
+// 7. Exact skill names emitted by Copilot CLI.
+dependencies
+| where timestamp > ago(30m)
+| where cloud_RoleName == "github-copilot"
+| extend skill = tostring(customDimensions["gen_ai.skill.name"])
+| where isnotempty(skill)
+| project timestamp, skill,
+    name, duration, success
+| order by timestamp desc
+

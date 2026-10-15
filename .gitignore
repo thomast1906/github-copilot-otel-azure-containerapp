@@ -1,0 +1,10 @@
+# Local deployment/session secrets
+.env
+.env.*
+!.env.example
+*.secret
+
+# Editor and operating-system files
+.DS_Store
+.vscode/
+.github/*
